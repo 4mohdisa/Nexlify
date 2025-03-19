@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+aiohttp
+beautifulsoup4
+markdownify
+python-multipart
+pydantic
+python-dotenv

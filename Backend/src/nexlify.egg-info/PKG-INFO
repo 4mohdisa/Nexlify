@@ -1,0 +1,12 @@
+Metadata-Version: 2.2
+Name: nexlify
+Version: 0.1.0
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: aiohttp
+Requires-Dist: beautifulsoup4
+Requires-Dist: markdownify
+Requires-Dist: python-multipart
+Requires-Dist: pydantic
+Requires-Dist: python-dotenv
+Dynamic: requires-dist

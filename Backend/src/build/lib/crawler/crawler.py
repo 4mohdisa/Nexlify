@@ -7,7 +7,6 @@ import logging
 from urllib.robotparser import RobotFileParser
 from .sitemap_parser import get_sitemap_urls
 from playwright.async_api import async_playwright
-import sys
 
 logger = logging.getLogger(__name__)
 
@@ -18,36 +17,20 @@ class WebCrawler:
         self.robots_cache = {}
         self.playwright = None
         self.browser = None
-        self.use_playwright = False  # Flag to track if Playwright is available
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
-        
-        # Try to initialize Playwright, but don't fail if it doesn't work
-        try:
-            self.playwright = await async_playwright().start()
-            self.browser = await self.playwright.chromium.launch(headless=True)
-            self.use_playwright = True
-            logger.info("Playwright initialized successfully")
-        except Exception as e:
-            logger.warning(f"Failed to initialize Playwright, falling back to simple HTTP requests: {str(e)}")
-            self.use_playwright = False
-            
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(headless=True)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.session:
             await self.session.close()
         if self.browser:
-            try:
-                await self.browser.close()
-            except:
-                pass
+            await self.browser.close()
         if self.playwright:
-            try:
-                await self.playwright.stop()
-            except:
-                pass
+            await self.playwright.stop()
 
     async def get_robots_parser(self, base_url: str) -> Optional[RobotFileParser]:
         """Get robots.txt parser for the given URL"""
@@ -82,42 +65,19 @@ class WebCrawler:
 
             self.visited_urls.add(url)
             
-            html = ""
-            title = ""
+            # Use Playwright to render JavaScript content
+            page = await self.browser.new_page()
+            await page.goto(url, wait_until="networkidle")
             
-            # Try to use Playwright if available
-            if self.use_playwright:
-                try:
-                    logger.info(f"Using Playwright to crawl {url}")
-                    page = await self.browser.new_page()
-                    await page.goto(url, wait_until="networkidle")
-                    
-                    # Wait a bit more for any delayed JS content
-                    await asyncio.sleep(2)
-                    
-                    # Get the fully rendered HTML content
-                    html = await page.content()
-                    title = await page.title()
-                    
-                    # Close the page to free resources
-                    await page.close()
-                    
-                    logger.info(f"Successfully crawled {url} with Playwright")
-                except Exception as e:
-                    logger.error(f"Playwright crawling failed for {url}: {str(e)}")
-                    self.use_playwright = False  # Disable Playwright for future requests
-                    # Fall back to regular HTTP request
+            # Wait a bit more for any delayed JS content
+            await asyncio.sleep(2)
             
-            # If Playwright wasn't available or failed, use regular HTTP request
-            if not html:
-                logger.info(f"Using regular HTTP request to crawl {url}")
-                async with self.session.get(url) as response:
-                    if response.status != 200:
-                        return {"success": False, "error": f"HTTP {response.status}"}
-                    
-                    html = await response.text()
-                    soup = BeautifulSoup(html, "html.parser")
-                    title = soup.title.string if soup.title else url.split("/")[-1]
+            # Get the fully rendered HTML content
+            html = await page.content()
+            title = await page.title()
+            
+            # Close the page to free resources
+            await page.close()
             
             # Parse with BeautifulSoup for further processing
             soup = BeautifulSoup(html, "html.parser")
