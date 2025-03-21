@@ -3,29 +3,22 @@ Crawler functions exactly matching the requirements document
 """
 import asyncio
 import logging
-from crawl4ai import AsyncWebCrawler
+from playwright.async_api import async_playwright
 from markdownify import markdownify
 import os
 from bs4 import BeautifulSoup
-import aiohttp
-import time
-import random
 
 logger = logging.getLogger(__name__)
 
 async def crawl_single_page(url: str, wait_time: int = 5, scroll_count: int = 3):
     """
-    Crawl a single page and return its HTML content.
+    Crawl a single page using Playwright to handle dynamic content.
     
     Args:
         url: The URL to crawl
-        wait_time: Time to wait for dynamic content to load (seconds)
-        scroll_count: Number of times to simulate scrolling
-        
-    This function implements the requirements document specification
-    with enhancements for dynamic content.
+        wait_time: Time to wait after initial load (seconds)
+        scroll_count: Number of times to scroll for lazy-loaded content
     """
-    # Ensure URL is a string and properly formatted
     url = str(url)
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
@@ -33,134 +26,47 @@ async def crawl_single_page(url: str, wait_time: int = 5, scroll_count: int = 3)
     logger.info(f"Attempting to crawl URL: {url}")
     
     try:
-        # First try using crawl4ai (Playwright-based)
-        async with AsyncWebCrawler() as crawler:
-            # The crawl4ai package should handle dynamic content automatically
-            result = await crawler.arun(url=url)
-            if result.success:
-                logger.info(f"Successfully crawled {url} using crawl4ai")
-                return result.html
-            else:
-                logger.warning(f"crawl4ai failed: {result.error_message}, trying fallback")
-                # If this fails, we'll try the fallback method below
-                raise Exception(result.error_message)
-    except Exception as e:
-        logger.warning(f"Error with crawl4ai: {str(e)}, using fallback HTTP method")
-        
-        # Fallback to regular HTTP requests with enhancements for dynamic content
-        try:
-            # Use a proper browser-like user agent to help with content blocking
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5"
-            }
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
             
-            async with aiohttp.ClientSession(headers=headers) as session:
-                logger.info(f"Sending HTTP request to {url}")
-                async with session.get(url, timeout=30) as response:
-                    if response.status != 200:
-                        raise Exception(f"HTTP error: {response.status}")
-                    
-                    initial_html = await response.text()
-                    
-                    # Initial parse with BeautifulSoup
-                    soup = BeautifulSoup(initial_html, 'html.parser')
-                    
-                    # Wait mechanism 1: Additional requests for resources that might contain embedded content
-                    # Find all linked resources (JavaScript, CSS, etc.)
-                    resource_tasks = []
-                    for tag in soup.find_all(['script', 'link']):
-                        src = tag.get('src') or tag.get('href')
-                        if src and (src.endswith('.js') or src.endswith('.css')):
-                            # Make the src absolute if it's relative
-                            if not src.startswith(('http://', 'https://')):
-                                if src.startswith('/'):
-                                    parts = str(response.url).split('/')
-                                    if len(parts) >= 3:
-                                        base = '/'.join(parts[:3])
-                                        src = f"{base}{src}"
-                                else:
-                                    src = f"{str(response.url).rstrip('/')}/{src.lstrip('/')}"
-                            
-                            # Fetch the resource
-                            resource_tasks.append(session.get(src, ssl=False))
-                    
-                    # Wait for all resource requests to complete
-                    if resource_tasks:
-                        try:
-                            await asyncio.gather(*resource_tasks, return_exceptions=True)
-                            logger.info(f"Fetched {len(resource_tasks)} additional resources")
-                        except Exception as e:
-                            # Log but continue if there are errors with resource fetching
-                            logger.warning(f"Error fetching resources: {str(e)}")
-                    
-                    # Wait mechanism 2: Sleep to allow for any JavaScript or delayed content
-                    logger.info(f"Waiting {wait_time} seconds for dynamic content")
-                    await asyncio.sleep(wait_time)
-                    
-                    # Wait mechanism 3: Simulate multiple requests to capture AJAX loaded content
-                    # Sometimes a second request after waiting captures more content
-                    try:
-                        async with session.get(url, timeout=30) as second_response:
-                            if second_response.status == 200:
-                                second_html = await second_response.text()
-                                second_soup = BeautifulSoup(second_html, 'html.parser')
-                                
-                                # If the second response has more content, use it
-                                if len(second_soup.get_text()) > len(soup.get_text()):
-                                    logger.info("Second request captured more content")
-                                    soup = second_soup
-                    except Exception as e:
-                        logger.warning(f"Error on second request: {str(e)}")
-                    
-                    # Wait mechanism 4: For some sites, simulate scrolling by making requests with different headers
-                    for i in range(scroll_count):
-                        try:
-                            # Modify the headers slightly to simulate different conditions
-                            scroll_headers = headers.copy()
-                            scroll_headers["Cache-Control"] = "no-cache"
-                            scroll_headers["Cookie"] = f"scrolled=true; position={i*1000}"
-                            
-                            async with session.get(url, headers=scroll_headers, timeout=30) as scroll_response:
-                                if scroll_response.status == 200:
-                                    scroll_html = await scroll_response.text()
-                                    scroll_soup = BeautifulSoup(scroll_html, 'html.parser')
-                                    
-                                    # If we got more content, use it
-                                    if len(scroll_soup.get_text()) > len(soup.get_text()):
-                                        logger.info(f"Scroll {i+1} captured more content")
-                                        soup = scroll_soup
-                                        
-                                    # Wait a bit between scroll requests
-                                    await asyncio.sleep(1)
-                        except Exception as e:
-                            logger.warning(f"Error on scroll {i+1}: {str(e)}")
-                    
-                    # Fix relative URLs to absolute
-                    base_url = str(response.url)
-                    for tag in soup.find_all(['a', 'img', 'link', 'script']):
-                        for attr in ['href', 'src']:
-                            if tag.has_attr(attr) and not tag[attr].startswith(('http://', 'https://', 'data:', 'javascript:')):
-                                if tag[attr].startswith('/'):
-                                    # Root-relative URL
-                                    parts = base_url.split('/')
-                                    if len(parts) >= 3:
-                                        base = '/'.join(parts[:3])  # Get domain part
-                                        tag[attr] = f"{base}{tag[attr]}"
-                                else:
-                                    # Document-relative URL
-                                    tag[attr] = f"{base_url.rstrip('/')}/{tag[attr].lstrip('/')}"
-                    
-                    # Get the processed HTML
-                    processed_html = str(soup)
-                    
-                    logger.info(f"Successfully crawled {url} using enhanced fallback HTTP method")
-                    return processed_html
-        except Exception as fallback_error:
-            error_msg = f"Fallback HTTP method also failed: {str(fallback_error)}"
-            logger.error(error_msg)
-            raise Exception(f"Failed to crawl {url}: {str(fallback_error)}")
+            # Navigate and wait for network idle
+            await page.goto(url, wait_until="networkidle")
+            
+            # Scroll to trigger lazy-loaded content
+            for i in range(scroll_count):
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(1)  # Wait for content to load after each scroll
+            
+            # Additional wait for any remaining dynamic content
+            await asyncio.sleep(wait_time)
+            
+            # Capture fully rendered HTML
+            html = await page.content()
+            await browser.close()
+            
+            # Process with BeautifulSoup
+            soup = BeautifulSoup(html, 'html.parser')
+            base_url = url
+            for tag in soup.find_all(['a', 'img', 'link', 'script']):
+                for attr in ['href', 'src']:
+                    if tag.has_attr(attr) and not tag[attr].startswith(('http://', 'https://', 'data:', 'javascript:')):
+                        if tag[attr].startswith('/'):
+                            # Fix the formula from the issue resolution doc
+                            parts = base_url.split('/')
+                            if len(parts) >= 3:
+                                base = '/'.join(parts[:3])  # Get domain part
+                                tag[attr] = f"{base}{tag[attr]}"
+                        else:
+                            tag[attr] = f"{base_url.rstrip('/')}/{tag[attr].lstrip('/')}"
+            
+            processed_html = str(soup)
+            logger.info(f"Successfully crawled {url} with Playwright")
+            return processed_html
+    
+    except Exception as e:
+        logger.error(f"Failed to crawl {url}: {str(e)}")
+        raise Exception(f"Failed to crawl {url}: {str(e)}")
 
 def generate_markdown(html: str, exclude_links: bool = False):
     """
@@ -201,4 +107,4 @@ def save_file(markdown: str, url: str) -> str:
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(markdown)
     
-    return filename
+    return f"{filename}.md"

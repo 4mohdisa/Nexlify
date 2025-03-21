@@ -29,8 +29,7 @@ async def crawl_urls(request: CrawlRequest, background_tasks: BackgroundTasks):
                 if not url_str.startswith(('http://', 'https://')):
                     url_str = 'https://' + url_str
                 
-                # Use the enhanced crawler with wait times for dynamic content
-                # Adjust wait_time and scroll_count based on the complexity of the site
+                # Use the Playwright crawler with optimized settings for dynamic content
                 html = await crawl_single_page(
                     url_str,
                     wait_time=8,  # Longer wait time for complex JS

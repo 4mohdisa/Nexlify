@@ -104,9 +104,14 @@ class WebCrawler:
                     
                     logger.info(f"Successfully crawled {url} with Playwright")
                 except Exception as e:
-                    logger.error(f"Playwright crawling failed for {url}: {str(e)}")
-                    self.use_playwright = False  # Disable Playwright for future requests
-                    # Fall back to regular HTTP request
+                    logger.error(f"Playwright failed for {url}: {str(e)}")
+                    # Fall back to HTTP for this URL only, not globally
+                    async with self.session.get(url) as response:
+                        if response.status != 200:
+                            return {"success": False, "error": f"HTTP {response.status}"}
+                html = await response.text()
+                soup = BeautifulSoup(html, "html.parser")
+                title = soup.title.string if soup.title else url.split("/")[-1]
             
             # If Playwright wasn't available or failed, use regular HTTP request
             if not html:
